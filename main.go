@@ -5,6 +5,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -74,7 +75,12 @@ func main() {
 		})
 		mu.Unlock()
 	})
-	if err := r.Run(); err != nil {
+
+	port := "8080"
+	if os.Getenv("PORT") {
+		port = os.Getenv("PORT")
+	}
+	if err := r.Run(":" + port); err != nil {
 		panic(err)
 	}
 }
