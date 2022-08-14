@@ -77,7 +77,7 @@ func main() {
 	})
 
 	port := "8080"
-	if os.Getenv("PORT") {
+	if os.Getenv("PORT") != "" {
 		port = os.Getenv("PORT")
 	}
 	if err := r.Run(":" + port); err != nil {
