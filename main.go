@@ -16,7 +16,7 @@ var mu sync.Mutex
 
 var githubUsers = []string{
 	"de1ux",
-	"NicoleeeBroadnax",
+	"NicoleBroadnax",
 	"lgoodman320",
 	"ChristiHarlow",
 	"dougMR",
