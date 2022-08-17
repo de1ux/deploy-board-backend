@@ -132,22 +132,40 @@ func getHttpClient() *http.Client {
 	}
 }
 
-func doesUrl200(url string) bool {
+func doesHttpStatus(url string, status int) (bool, error) {
 	resp, err := getHttpClient().Get(url)
 	if err != nil {
-		log.Printf("failed check url 200 request: %s\n", err)
-		return false
+		log.Printf("failed check for status %d, got err: %s\n", status, err)
+		return false, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Got %d for %s", resp.StatusCode, url)
+	if resp.StatusCode != status {
+		log.Printf("Got %d while looking for %d on url %s", resp.StatusCode, status, url)
 	}
-	return resp.StatusCode == http.StatusOK
+	return resp.StatusCode == status, nil
+}
+
+func doesUrl404(url string) (bool, error) {
+	return doesHttpStatus(url, http.StatusNotFound)
+}
+
+func doesUrl200(url string) (bool, error) {
+	return doesHttpStatus(url, http.StatusOK)
 }
 
 func doesGithubRepoExist(githubUsername, repoName string) bool {
-	return doesUrl200(fmt.Sprintf("https://github.com/%s/%s", githubUsername, repoName))
+	does200, _ := doesUrl200(fmt.Sprintf("https://github.com/%s/%s", githubUsername, repoName))
+	return does200
 }
 
 func doesHerokuDeployExist(githubUsername, deployName string) bool {
-	return doesUrl200(fmt.Sprintf("https://%s-%s.herokuapp.com", githubUsername, deployName))
+	url := fmt.Sprintf("https://%s-%s.herokuapp.com", githubUsername, deployName)
+	if strings.Contains(deployName, "backend") {
+		did404, err := doesUrl404(url)
+		if err != nil {
+			return false
+		}
+		return !did404
+	}
+	does200, _ := doesUrl200(url)
+	return does200
 }
