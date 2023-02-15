@@ -75,11 +75,13 @@ func main() {
 		})
 		mu.Unlock()
 	})
+	r.GET("/", func(c *gin.Context) {})
 
-	port := "8080"
+	port := "5000"
 	if os.Getenv("PORT") != "" {
 		port = os.Getenv("PORT")
 	}
+	println("Starting up server")
 	if err := r.Run(":" + port); err != nil {
 		panic(err)
 	}
