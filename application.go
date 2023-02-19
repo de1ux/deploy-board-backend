@@ -1,35 +1,40 @@
 package main
 
 import (
-	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/de1ux/deploy-tracker/integration"
 	"github.com/gin-gonic/gin"
+	"gopkg.in/yaml.v2"
 	"log"
 	"net/http"
 	"os"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 )
 
-var mu sync.Mutex
-
-var githubUsers = []string{
-	"de1ux",
-	"NicoleBroadnax",
-	"lgoodman320",
-	"ChristiHarlow",
-	"dougMR",
-	"WayneStB",
-	"UniqueCre8tion85",
-	"Sccotyiab",
-	"chazdickerson1428",
-	"gsnunez",
-	"zhafner",
-	"shantinaperez",
-	"SMaeweather",
-	"Itismywinningseason",
+type User struct {
+	Name                   string `json:"name"`
+	GithubHandle           string `yaml:"github_handle" json:"github_handle"`
+	AwsAccessKey           string `yaml:"aws_access_key" json:"-"`
+	AwsSecretAccessKeyId   string `yaml:"aws_secret_access_key_id" json:"-"`
+	HasCloudfronts         bool   `json:"has_cloudfronts"`
+	HasS3Buckets           bool   `json:"has_s3_buckets"`
+	HasElasticBeanstalks   bool   `json:"has_elastic_beanstalks"`
+	HasGitFrontendBlog     bool   `json:"has_git_frontend_blog"`
+	HasGitBackendBlog      bool   `json:"has_git_backend_blog"`
+	HasGitFrontendCapstone bool   `json:"has_git_frontend_capstone"`
+	HasGitBackendCapstone  bool   `json:"has_git_backend_capstone"`
+	HasRDS                 bool   `json:"has_rds"`
+	Error                  string `json:"error"`
 }
+
+type UserCreds struct {
+	Users []*User `json:"users"`
+}
+
+var mu sync.Mutex
 
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -48,30 +53,111 @@ func CORSMiddleware() gin.HandlerFunc {
 }
 
 func main() {
-	var deploys []map[string]interface{}
+	b, err := os.ReadFile("creds.yaml")
+	if err != nil {
+		panic(err)
+	}
 
-	go func(mu *sync.Mutex) {
+	users := &UserCreds{}
+	err = yaml.Unmarshal(b, users)
+	if err != nil {
+		log.Fatalf("cannot unmarshal data: %v", err)
+	}
+	if err != nil {
+		panic(err)
+	}
+
+	go func(mu *sync.Mutex, users *UserCreds) {
 		for {
-			log.Printf("Fetching deploys...")
-			newDeploys := getDeploys()
-			log.Printf("Fetching deploys...done")
-
-			log.Printf("Acquiring lock to overwrite results...")
+			log.Printf("Updating users...")
 			mu.Lock()
-			deploys = newDeploys
+
+			wg := sync.WaitGroup{}
+			for _, u := range users.Users {
+				wg.Add(1)
+				go func(user *User) {
+					sess, err := session.NewSession(&aws.Config{
+						Region:      aws.String("us-east-1"),
+						Credentials: credentials.NewStaticCredentials(user.AwsAccessKey, user.AwsSecretAccessKeyId, ""),
+					})
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					hasCloudFronts, err := integration.HasCloudfronts(sess)
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					hasS3Buckets, err := integration.HasS3Buckets(sess)
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					hasElasticBeanstalks, err := integration.HasElasticBeanstalks(sess)
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					hasRDS, err := integration.HasRDS(sess)
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					githubFrontendBlog, err := integration.DoesGithubRepoExist(user.GithubHandle, "blog-frontend")
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					githubBackendBlog, err := integration.DoesGithubRepoExist(user.GithubHandle, "blog-backend")
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					githubFrontendCapstone, err := integration.DoesGithubRepoExist(user.GithubHandle, "capstone-frontend")
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					githubBackendCapstone, err := integration.DoesGithubRepoExist(user.GithubHandle, "capstone-backend")
+					if err != nil {
+						user.Error = err.Error()
+						log.Println(err.Error())
+					}
+
+					user.HasGitFrontendBlog = githubFrontendBlog
+					user.HasGitBackendBlog = githubBackendBlog
+					user.HasGitFrontendCapstone = githubFrontendCapstone
+					user.HasGitBackendCapstone = githubBackendCapstone
+					user.HasCloudfronts = hasCloudFronts
+					user.HasS3Buckets = hasS3Buckets
+					user.HasElasticBeanstalks = hasElasticBeanstalks
+					user.HasRDS = hasRDS
+					wg.Done()
+				}(u)
+			}
+			wg.Wait()
 			mu.Unlock()
-			log.Printf("Acquiring lock to overwrite results...done")
+			log.Printf("Updating users...done")
 			log.Printf("Sleeping...")
 			time.Sleep(time.Second * 30)
 		}
-	}(&mu)
+	}(&mu, users)
 
 	r := gin.Default()
 	r.Use(CORSMiddleware())
 	r.GET("/deploys", func(c *gin.Context) {
 		mu.Lock()
 		c.JSON(http.StatusOK, gin.H{
-			"data": deploys,
+			"data": users,
 		})
 		mu.Unlock()
 	})
@@ -85,89 +171,4 @@ func main() {
 	if err := r.Run(":" + port); err != nil {
 		panic(err)
 	}
-}
-
-func getDeploys() []map[string]interface{} {
-	results := make(chan map[string]interface{}, len(githubUsers))
-
-	wg := sync.WaitGroup{}
-	for _, user := range githubUsers {
-		wg.Add(1)
-		go func(u string) {
-			results <- getDeploysByUsername(u)
-			wg.Done()
-		}(user)
-	}
-	wg.Wait()
-	close(results)
-
-	var deploys []map[string]interface{}
-	for result := range results {
-		deploys = append(deploys, result)
-	}
-
-	sort.Slice(deploys, func(i, j int) bool {
-		return strings.ToLower(deploys[i]["username"].(string)) < strings.ToLower(deploys[j]["username"].(string))
-	})
-
-	return deploys
-}
-
-func getDeploysByUsername(username string) map[string]interface{} {
-	return map[string]interface{}{
-		"username":                 username,
-		"git_frontend_blog":        doesGithubRepoExist(username, "blog-frontend"),
-		"git_backend_blog":         doesGithubRepoExist(username, "blog-backend"),
-		"heroku_frontend_blog":     doesHerokuDeployExist(username, "blog-frontend"),
-		"heroku_backend_blog":      doesHerokuDeployExist(username, "blog-backend"),
-		"git_frontend_capstone":    doesGithubRepoExist(username, "capstone-frontend"),
-		"git_backend_capstone":     doesGithubRepoExist(username, "capstone-backend"),
-		"heroku_frontend_capstone": doesHerokuDeployExist(username, "capstone-frontend"),
-		"heroku_backend_capstone":  doesHerokuDeployExist(username, "capstone-backend"),
-	}
-
-}
-
-func getHttpClient() *http.Client {
-	return &http.Client{
-		Timeout: 5 * time.Second,
-	}
-}
-
-func doesHttpStatus(url string, status int) (bool, error) {
-	resp, err := getHttpClient().Get(url)
-	if err != nil {
-		log.Printf("failed check for status %d, got err: %s\n", status, err)
-		return false, err
-	}
-	if resp.StatusCode != status {
-		log.Printf("Got %d while looking for %d on url %s", resp.StatusCode, status, url)
-	}
-	return resp.StatusCode == status, nil
-}
-
-func doesUrl404(url string) (bool, error) {
-	return doesHttpStatus(url, http.StatusNotFound)
-}
-
-func doesUrl200(url string) (bool, error) {
-	return doesHttpStatus(url, http.StatusOK)
-}
-
-func doesGithubRepoExist(githubUsername, repoName string) bool {
-	does200, _ := doesUrl200(fmt.Sprintf("https://github.com/%s/%s", githubUsername, repoName))
-	return does200
-}
-
-func doesHerokuDeployExist(githubUsername, deployName string) bool {
-	url := fmt.Sprintf("https://%s-%s.herokuapp.com", githubUsername, deployName)
-	if strings.Contains(deployName, "backend") {
-		did404, err := doesUrl404(url)
-		if err != nil {
-			return false
-		}
-		return !did404
-	}
-	does200, _ := doesUrl200(url)
-	return does200
 }
